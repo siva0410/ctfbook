@@ -160,7 +160,7 @@ gef➤  dps
 chall_base = main_leak - main_addr
     #+end_src
 
-    最後に、 ~"/bin/sh/"~ を用意し、シェルを起動するROPを作成する。 
+    最後に、 ~"/bin/sh"~ を用意し、シェルを起動するROPを作成する。 
 
 **** ROPチェーンの作成
      最後の入力では、 ~msg~ の最初に ~/bin/sh\x00~ を挿入し、canaryが存在した場所には、先程特定したcanaryの値入るように調整する。
