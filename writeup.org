@@ -294,4 +294,68 @@ uid=1000(shiba) gid=1000(shiba) groups=1000(shiba),4(adm),24(cdrom),27(sudo),30(
 
     
     
-    
+*** chall_resolve
+**** 問題
+     #+begin_src c
+#include <stdio.h>
+#include <unistd.h>
+
+int main(void){
+	char msg[0x10] = {};
+	void **p;
+
+	setbuf(stdout, NULL);
+
+	printf("Input message >> ");
+	fgets(msg, 0x80, stdin);
+
+	printf("Input address >> ");
+	scanf("%p", &p);
+	printf("Input value   >> ");
+	scanf("%p", p);
+
+	return 0;
+}
+     #+end_src
+     
+     #+begin_example
+shiba@shiba-Endeavor-MR4900:~/ctfbook/pwnable/99_challs/resolve$ checksec --file chall_resolve
+[*] '/home/shiba/ctfbook/pwnable/99_challs/resolve/chall_resolve'
+    Arch:     amd64-64-little
+    RELRO:    No RELRO
+    Stack:    Canary found
+    NX:       NX enabled
+    PIE:      No PIE (0x400000)
+     #+end_example
+
+     まず、実行ファイルにchecksecを利用すると、RELROが適用されていないこと、またPIEが無効であることがわかる。
+
+     そして、ソースコードを見てみると、このプログラムでは ~msg~ に文字列入力を行った後、任意のアドレスに任意の値を書き込むことができる。
+     また、 ~fgets~ において、スタックバッファオーバフローの脆弱性が存在していることがわかる。
+
+     そこで、SSPを回避するため、 ~__stack_chk_fail~ のGOTを書き換え、RIPを奪うことを考えていく。
+
+**** AAWの作成
+     まず、このプログラムでは、1度だけAAWが可能なものの、AAW後にプログラムが終了してしまう。
+     そこで、先述した通り、 ~__stack_chk_fail~ のGOTを ~main~ のアドレスに書き換えることで、
+     繰り返しプログラムを呼び出すことを目標とする。
+
+     そこで、まず最初にGOTを ~main~ に書き換え、 ~__stack_chk_fail~ が呼び出されるように、スタックバッファオーバフローを引き起す入力を行う。
+
+     #+begin_example
+gef➤  dps
+0x00007fffffffdb50│+0x0000: 0x00007ffff7fae2e8  →  0x0000000000000000    ← $rsp
+0x00007fffffffdb58│+0x0008: 0x0000000000401240  →  <__libc_csu_init+0> endbr64
+0x00007fffffffdb60│+0x0010: 0x0000000a65676f68 ("hoge\n"?)       ← $rax, $r8
+0x00007fffffffdb68│+0x0018: 0x0000000000000000
+0x00007fffffffdb70│+0x0020: 0x00007fffffffdc70  →  0x0000000000000001
+0x00007fffffffdb78│+0x0028: 0xa1d05dcf72cedc00
+0x00007fffffffdb80│+0x0030: 0x0000000000000000   ← $rbp
+0x00007fffffffdb88│+0x0038: 0x00007ffff7de1083  →  <__libc_start_main+243> mov edi, eax
+...
+     #+end_example
+     ~msg~ に ~hoge~ を入力したときのスタックの状態を確認してみる。
+     すると、 ~rsp+0x10~ に ~msg~ の領域が確保されていることがわかる。
+     また、canaryは ~rsp+0x28~ に配置されていることがわかる。
+
+     
